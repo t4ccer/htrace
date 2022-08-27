@@ -53,6 +53,7 @@ common common-lang
     KindSignatures
     LambdaCase
     MultiParamTypeClasses
+    NegativeLiterals
     NumericUnderscores
     OverloadedStrings
     PolyKinds
@@ -69,12 +70,12 @@ common common-lang
     UndecidableInstances
     ViewPatterns
     OverloadedRecordDot
-    NegativeLiterals
 
 library
   import:          common-lang
   exposed-modules: Htrace
   hs-source-dirs:  src
+  build-depends:   random
 
 executable htrace
   import:         common-lang

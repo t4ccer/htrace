@@ -1,9 +1,11 @@
 module Htrace where
 
-import Control.Monad (forM_, guard)
-import GHC.Records (HasField (getField))
-import System.IO (openFile, hPutStr, hClose, hFlush, IOMode (WriteMode))
+import Control.Monad (forM, forM_, guard)
 import Data.Coerce (coerce)
+import Data.Ord (clamp)
+import GHC.Records (HasField (getField))
+import System.IO (IOMode (WriteMode), hClose, hFlush, hPutStr, openFile)
+import System.Random (mkStdGen, randomIO, setStdGen)
 
 inf :: Double
 inf = (10 :: Double) ^ (1000 :: Integer)
@@ -36,13 +38,13 @@ mmap :: (Double -> Double) -> Vec3 -> Vec3
 mmap f (Vec3 (x, y, z)) = Vec3 (f x, f y, f z)
 
 (*!) :: Double -> Vec3 -> Vec3
-(*!) s = mmap (*s)
+(*!) s = mmap (* s)
 infixl 7 *!
 
 (+!) :: Double -> Vec3 -> Vec3
-(+!) s = mmap (+s)
+(+!) s = mmap (+ s)
 infixl 6 +!
-  
+
 instance HasField "x" Vec3 Double where
   getField (Vec3 (x, _, _)) = x
 
@@ -65,14 +67,14 @@ instance Fractional Vec3 where
   (/) = vec3Bin (/)
 
 vec3LenSqr :: Vec3 -> Double
-vec3LenSqr (Vec3 (x, y, z)) = x*x + y*y + z*z
+vec3LenSqr (Vec3 (x, y, z)) = x * x + y * y + z * z
 
 vec3Len :: Vec3 -> Double
 vec3Len = sqrt . vec3LenSqr
 
 -- | Dot product
 vec3Dot :: Vec3 -> Vec3 -> Double
-vec3Dot (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) = x1*x2 + y1*y2 + z1*z2
+vec3Dot (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) = x1 * x2 + y1 * y2 + z1 * z2
 
 -- | Cross product
 vec3Cross :: Vec3 -> Vec3 -> Vec3
@@ -87,15 +89,20 @@ type Point3 = Vec3
 type Color = Vec3
 
 -- | Render color to P3 ppm format
-renderColor :: Color -> String
-renderColor v = mconcat
-  [ show (floor @Double @Int (v.x * 255.999))
-  , " "
-  , show (floor @Double @Int (v.y * 255.999))
-  , " "
-  , show (floor @Double @Int (v.z * 255.999))
-  , "\n"
-  ]
+renderColor :: Color -> Int -> String
+renderColor c samples =
+  let scale :: Double = 1.0 / (fromIntegral samples)
+      r = 256 * (clamp (0, 0.999) (c.x * scale))
+      g = 256 * (clamp (0, 0.999) (c.y * scale))
+      b = 256 * (clamp (0, 0.999) (c.z * scale))
+   in mconcat
+        [ show (floor @Double @Int r)
+        , " "
+        , show (floor @Double @Int g)
+        , " "
+        , show (floor @Double @Int b)
+        , "\n"
+        ]
 
 data Ray = Ray
   { origin :: Vec3
@@ -148,18 +155,19 @@ sphere center radius = Hittable $ \ray tMin tMax -> do
   let oc :: Vec3 = ray.origin - center
       a = vec3LenSqr ray.direction
       halfB = vec3Dot oc ray.direction
-      c = (vec3LenSqr oc) - (radius*radius)
-      discriminant = halfB*halfB - a*c
+      c = (vec3LenSqr oc) - (radius * radius)
+      discriminant = halfB * halfB - a * c
   guard (discriminant >= 0)
   let sqrtd = sqrt discriminant
   let root = (-halfB - sqrtd) / a
-  newRoot <- if root < tMin || tMax < root
-             then
-               let root' = (-halfB - sqrtd) / a;
-               in if root' < tMin || tMax < root'
-                  then Nothing
-                  else pure root'
-             else pure root
+  newRoot <-
+    if root < tMin || tMax < root
+      then
+        let root' = (-halfB - sqrtd) / a
+         in if root' < tMin || tMax < root'
+              then Nothing
+              else pure root'
+      else pure root
   let t = newRoot
       p = rayAt t ray
       outwardNormal = (p - center) / (toVec3 radius)
@@ -173,41 +181,71 @@ rayColor ray (Hittable world) =
     Nothing ->
       let unitDir = vec3Unit ray.direction
           tSky :: Vec3 = toVec3 (0.5 * (unitDir.y + 1))
-      in (1.0-tSky)*(vec3 1.0 1.0 1.0) + tSky*(vec3 0.5 0.7 1.0)
+       in (1.0 - tSky) * (vec3 1.0 1.0 1.0) + tSky * (vec3 0.5 0.7 1.0)
+
+data Camera = Camera
+  { camAspectRatio :: Double
+  , camViewportHeight :: Double
+  , camFocalLength :: Double
+  , camOrigin :: Point3
+  }
+
+camViewportWidth :: Camera -> Double
+camViewportWidth cam = (camAspectRatio cam) * (camViewportHeight cam)
+
+camHorizontal :: Camera -> Vec3
+camHorizontal cam = vec3 (camViewportWidth cam) 0 0
+
+camVertical :: Camera -> Vec3
+camVertical cam = vec3 0 (camViewportHeight cam) 0
+
+camLowerLeftCorner :: Camera -> Point3
+camLowerLeftCorner cam =
+  (camOrigin cam) - (camHorizontal cam / 2) - (camVertical cam / 2) - (vec3 0 0 (camFocalLength cam))
+
+getRay :: Camera -> Double -> Double -> Ray
+getRay cam u v =
+  Ray
+    (camOrigin cam)
+    ((camLowerLeftCorner cam) + u *! (camHorizontal cam) + v *! (camVertical cam) - (camOrigin cam))
 
 run :: IO ()
 run = do
+  -- Poor mans ReaderT
+  let gen = mkStdGen 42
+  setStdGen gen
+
   h <- openFile "out.ppm" WriteMode
 
   -- Image
   let aspectRatio :: Double = 16 / 9
       imageWidth :: Int = 400
       imageHeight :: Int = floor (fromIntegral imageWidth / aspectRatio)
+      samples = 128
 
   -- Camera
+  let cam = Camera aspectRatio 2 1 0
 
-  let viewportHeight :: Double = 2
-      viewportWidth :: Double = viewportHeight * aspectRatio
-      focalLength :: Double = 1
-      origin :: Vec3 = 0
-      horizontal = vec3 viewportWidth 0 0
-      vertical = vec3 0 viewportHeight 0
-      lowerLeftCorner = origin - horizontal/2 - vertical/2 - (vec3 0 0 focalLength)
-  
+  -- World
+  let world =
+        mconcat
+          [ sphere (vec3 -1 0 -1) 0.5
+          , sphere (vec3 1 0 -1) 0.25
+          , sphere (vec3 0 -100.5 -1) 100 -- Ground
+          ]
+
   -- Render
-      
-  hPutStr h $ mconcat[ "P3\n", show imageWidth, " ", show imageHeight, "\n255\n"]
+
+  hPutStr h $ mconcat ["P3\n", show imageWidth, " ", show imageHeight, "\n255\n"]
   forM_ [(imageHeight - 1), (imageHeight - 2) .. 0] $ \j -> do
     forM_ [0 .. (imageWidth - 1)] $ \i -> do
-      let u :: Double = (fromIntegral i) / (fromIntegral (imageWidth - 1))
-          v :: Double = (fromIntegral j) / (fromIntegral (imageHeight - 1))
-          ray = Ray origin (lowerLeftCorner + (u *! horizontal) + (v *! vertical) - origin)
-          world = mconcat
-            [ sphere (vec3 -1 0 -1) 0.5
-            , sphere (vec3 1 0 -1) 0.25 
-            , sphere (vec3 0 -100.5 -1) 100 -- Ground
-            ]
-          pixelColor = rayColor ray world
-      hPutStr h $ renderColor pixelColor
+      pixelColor <- fmap sum $ forM [1 .. samples] $ \_ -> do
+        ur <- randomIO
+        vr <- randomIO
+        let u :: Double = (fromIntegral i + ur) / (fromIntegral (imageWidth - 1))
+            v :: Double = (fromIntegral j + vr) / (fromIntegral (imageHeight - 1))
+            ray = getRay cam u v
+        pure $ rayColor ray world
+      hPutStr h $ renderColor pixelColor samples
   hFlush h
   hClose h
