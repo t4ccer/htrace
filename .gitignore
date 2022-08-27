@@ -1,0 +1,10 @@
+*~
+dist-newstyle
+prices
+.direnv
+.envrc
+db
+logfile
+frontend/node_modules
+frontend/dist
+*.ppm

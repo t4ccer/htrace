@@ -1,0 +1,84 @@
+cabal-version:      3.0
+name:               htrace
+version:            0.1
+synopsis:           htrace
+description:        htrace
+homepage:           https://github.com/t4ccer/htrace
+bug-reports:        https://github.com/t4ccer/htrace
+license:            GPL-3.0-only
+license-file:       LICENSE
+author:             t4ccer
+maintainer:         t4ccer
+copyright:          t4ccer
+category:           TODO
+build-type:         Simple
+tested-with:        GHC ==9.2.3
+extra-source-files: README.md
+
+source-repository head
+  type:     git
+  location: https://github.com/t4ccer/htrace
+
+common common-lang
+  ghc-options:
+    -Wall -Wcompat -Wincomplete-uni-patterns -Wno-unused-do-bind
+    -Wno-partial-type-signatures -Wincomplete-record-updates
+    -Wmissing-deriving-strategies -Wno-name-shadowing -Wunused-foralls
+    -fprint-explicit-foralls -Werror
+
+  default-language:   Haskell2010
+  build-depends:      base
+  default-extensions:
+    BangPatterns
+    BinaryLiterals
+    BlockArguments
+    ConstraintKinds
+    DataKinds
+    DefaultSignatures
+    DeriveAnyClass
+    DeriveFunctor
+    DeriveGeneric
+    DeriveLift
+    DeriveTraversable
+    DerivingStrategies
+    DerivingVia
+    DuplicateRecordFields
+    EmptyCase
+    FlexibleContexts
+    FlexibleInstances
+    GADTs
+    GeneralizedNewtypeDeriving
+    ImportQualifiedPost
+    InstanceSigs
+    KindSignatures
+    LambdaCase
+    MultiParamTypeClasses
+    NumericUnderscores
+    OverloadedStrings
+    PolyKinds
+    RankNTypes
+    RecordWildCards
+    ScopedTypeVariables
+    StandaloneDeriving
+    TemplateHaskell
+    TupleSections
+    TypeApplications
+    TypeFamilies
+    TypeOperators
+    TypeSynonymInstances
+    UndecidableInstances
+    ViewPatterns
+    OverloadedRecordDot
+    NegativeLiterals
+
+library
+  import:          common-lang
+  exposed-modules: Htrace
+  hs-source-dirs:  src
+
+executable htrace
+  import:         common-lang
+  ghc-options:    -O2
+  hs-source-dirs: app
+  main-is:        Main.hs
+  build-depends:  htrace
