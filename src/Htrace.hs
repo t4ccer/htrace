@@ -164,11 +164,12 @@ lambertian col = Material $ \_rayIn hitRec -> do
         , scattered = Ray hitRec.p scatterDir
         }
 
--- | Perfectly reflective metal surface
-metal :: MonadRandom m => Color -> Material m
-metal col = Material $ \rayIn hitRec -> do
+-- | Fuzzy metal surface
+metal :: MonadRandom m => Color -> Double -> Material m
+metal col fuzz = Material $ \rayIn hitRec -> do
+  randomFuzz <- randomInUnitSphere
   let reflected = reflect (vec3Unit rayIn.direction) hitRec.normal
-      scattered = Ray hitRec.p reflected
+      scattered = Ray hitRec.p (reflected + (fuzz *! randomFuzz))
   if (vec3Dot scattered.direction hitRec.normal > 0)
     then
       pure $
@@ -301,7 +302,7 @@ run = do
   -- World
   let world =
         mconcat
-          [ sphere (vec3 -1 0 -1) 0.5 (metal $ vec3 0.3 0.3 0.3)
+          [ sphere (vec3 -1 0 -1) 0.5 (metal (vec3 0.3 0.3 0.3) 0.25)
           , sphere (vec3 1 0 -1) 0.25 (lambertian $ vec3 0 0 0.3)
           , sphere (vec3 0 -100.5 -1) 100 (lambertian $ vec3 0 0.3 0)
           ]
