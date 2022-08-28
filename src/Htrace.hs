@@ -197,7 +197,7 @@ sphere center radius = Hittable $ \ray tMin tMax -> do
 rayColorIO :: Ray -> Hittable -> Int -> IO Color
 rayColorIO _ _ 0 = pure 0
 rayColorIO ray (Hittable world) maxDepth =
-  case world ray 0 inf of
+  case world ray 0.001 inf of
     Just rec' -> do
       randomInUnitSphere <- randomInUnitSphereIO
       let target = rec'.p + rec'.normal + randomInUnitSphere
