@@ -106,6 +106,9 @@ vec3Cross (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
 vec3Unit :: Vec3 -> Vec3Unit
 vec3Unit v = mmap (/ vec3Len v) v
 
+reflect :: Vec3 -> Vec3 -> Vec3
+reflect v n = v - 2 * (toVec3 $ vec3Dot v n) * n
+
 type Point3 = Vec3
 type Color = Vec3
 
@@ -161,6 +164,21 @@ lambertian col = Material $ \_rayIn hitRec -> do
         , scattered = Ray hitRec.p scatterDir
         }
 
+-- | Perfectly reflective metal surface
+metal :: MonadRandom m => Color -> Material m
+metal col = Material $ \rayIn hitRec -> do
+  let reflected = reflect (vec3Unit rayIn.direction) hitRec.normal
+      scattered = Ray hitRec.p reflected
+  if (vec3Dot scattered.direction hitRec.normal > 0)
+    then
+      pure $
+        Just
+          MaterialRecord
+            { attenuation = col
+            , scattered = scattered
+            }
+    else pure Nothing
+
 mkHitRecord :: Ray -> Double -> Point3 -> Vec3 -> HitRecord
 mkHitRecord ray t p outwardNormal =
   let (frontFace, normal) = getFaceNormal ray outwardNormal
@@ -169,7 +187,6 @@ mkHitRecord ray t p outwardNormal =
         , t = t
         , normal = normal
         , frontFace = frontFace
-        -- , mat = mat
         }
 
 data HitRecord = HitRecord
@@ -284,7 +301,7 @@ run = do
   -- World
   let world =
         mconcat
-          [ sphere (vec3 -1 0 -1) 0.5 (lambertian $ vec3 0.3 0 0)
+          [ sphere (vec3 -1 0 -1) 0.5 (metal $ vec3 0.3 0.3 0.3)
           , sphere (vec3 1 0 -1) 0.25 (lambertian $ vec3 0 0 0.3)
           , sphere (vec3 0 -100.5 -1) 100 (lambertian $ vec3 0 0.3 0)
           ]
