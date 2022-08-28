@@ -4,8 +4,10 @@ import Control.Monad (forM, forM_, guard)
 import Data.Coerce (coerce)
 import Data.Ord (clamp)
 import GHC.Records (HasField (getField))
-import System.IO (IOMode (WriteMode), hClose, hFlush, hPutStr, openFile)
+import System.IO (IOMode (WriteMode), hClose, hFlush, hPutStr, openFile, stdout)
 import System.Random (mkStdGen, randomIO, setStdGen)
+import Data.Time.Clock (getCurrentTime)
+import Data.List (intercalate)
 
 inf :: Double
 inf = (10 :: Double) ^ (1000 :: Integer)
@@ -36,6 +38,23 @@ vec3Bin f (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) = Vec3 (f x1 x2, f y1 y2, f z1
 
 mmap :: (Double -> Double) -> Vec3 -> Vec3
 mmap f (Vec3 (x, y, z)) = Vec3 (f x, f y, f z)
+
+randomRangeIO :: Double -> Double -> IO Double
+randomRangeIO min' max' = (\r -> min' + (max' - min') * r) <$>  randomIO
+
+vec3UnitRandomIO :: IO Vec3Unit
+vec3UnitRandomIO = fmap Vec3Unit (vec3 <$> randomIO <*> randomIO <*> randomIO)
+
+vec3RandomRangeIO :: Double -> Double -> IO Vec3
+vec3RandomRangeIO min' max' =
+  vec3 <$> randomRangeIO min' max' <*> randomRangeIO min' max' <*> randomRangeIO min' max'
+
+randomInUnitSphereIO :: IO Vec3
+randomInUnitSphereIO = do
+  v <- vec3RandomRangeIO -1 1
+  if vec3LenSqr v >= 1
+    then randomInUnitSphereIO
+    else pure v
 
 (*!) :: Double -> Vec3 -> Vec3
 (*!) s = mmap (* s)
@@ -173,15 +192,20 @@ sphere center radius = Hittable $ \ray tMin tMax -> do
       outwardNormal = (p - center) / (toVec3 radius)
   pure $ mkHitRecord ray t p outwardNormal
 
--- | Convert ray to sky color
-rayColor :: Ray -> Hittable -> Color
-rayColor ray (Hittable world) =
+-- | Convert ray to color
+rayColorIO :: Ray -> Hittable -> Int -> IO Color
+rayColorIO _ _ 0 = pure 0
+rayColorIO ray (Hittable world) maxDepth =
   case world ray 0 inf of
-    Just rec' -> 0.5 * (rec'.normal + 1)
+    Just rec' -> do
+      randomInUnitSphere <- randomInUnitSphereIO
+      let target = rec'.p + rec'.normal + randomInUnitSphere
+      c <- rayColorIO (Ray rec'.p (target - rec'.p)) (Hittable world) (maxDepth - 1)
+      pure $ 0.5 * c
     Nothing ->
       let unitDir = vec3Unit ray.direction
           tSky :: Vec3 = toVec3 (0.5 * (unitDir.y + 1))
-       in (1.0 - tSky) * (vec3 1.0 1.0 1.0) + tSky * (vec3 0.5 0.7 1.0)
+       in pure $ (1.0 - tSky) * (vec3 1.0 1.0 1.0) + tSky * (vec3 0.5 0.7 1.0)
 
 data Camera = Camera
   { camAspectRatio :: Double
@@ -214,14 +238,20 @@ run = do
   -- Poor mans ReaderT
   let gen = mkStdGen 42
   setStdGen gen
+  fname <- intercalate "-" . take 2 . words . show <$> getCurrentTime
 
-  h <- openFile "out.ppm" WriteMode
+  h <- openFile ("out/" <> fname) WriteMode
 
   -- Image
   let aspectRatio :: Double = 16 / 9
-      imageWidth :: Int = 400
       imageHeight :: Int = floor (fromIntegral imageWidth / aspectRatio)
+      imageWidth :: Int = 400
       samples = 128
+      maxDepth = 48;
+      -- imageWidth :: Int = 4096
+      -- samples = 512
+      -- maxDepth = 256;
+
 
   -- Camera
   let cam = Camera aspectRatio 2 1 0
@@ -238,6 +268,8 @@ run = do
 
   hPutStr h $ mconcat ["P3\n", show imageWidth, " ", show imageHeight, "\n255\n"]
   forM_ [(imageHeight - 1), (imageHeight - 2) .. 0] $ \j -> do
+    putStr $ "\rScanlines remaining: " <> show j <> " "
+    hFlush stdout
     forM_ [0 .. (imageWidth - 1)] $ \i -> do
       pixelColor <- fmap sum $ forM [1 .. samples] $ \_ -> do
         ur <- randomIO
@@ -245,7 +277,8 @@ run = do
         let u :: Double = (fromIntegral i + ur) / (fromIntegral (imageWidth - 1))
             v :: Double = (fromIntegral j + vr) / (fromIntegral (imageHeight - 1))
             ray = getRay cam u v
-        pure $ rayColor ray world
+        rayColorIO ray world maxDepth
       hPutStr h $ renderColor pixelColor samples
   hFlush h
   hClose h
+  putStrLn "Done!"

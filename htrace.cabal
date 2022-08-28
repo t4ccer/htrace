@@ -75,7 +75,9 @@ library
   import:          common-lang
   exposed-modules: Htrace
   hs-source-dirs:  src
-  build-depends:   random
+  build-depends:
+    , random
+    , time
 
 executable htrace
   import:         common-lang
