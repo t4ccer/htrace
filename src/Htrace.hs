@@ -6,7 +6,13 @@ import Data.Ord (clamp)
 import Data.Time.Clock (getCurrentTime)
 import GHC.Records (HasField (getField))
 import System.IO (IOMode (WriteMode), hClose, hFlush, hPutStr, openFile, stdout)
-import System.Random (mkStdGen, randomIO, setStdGen)
+import System.Random (Random, mkStdGen, randomIO, setStdGen)
+
+class Monad m => MonadRandom m where
+  random :: Random a => m a
+
+instance MonadRandom IO where
+  random = randomIO
 
 inf :: Double
 inf = (10 :: Double) ^ (1000 :: Integer)
@@ -28,23 +34,28 @@ vec3Bin f (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) = Vec3 (f x1 x2, f y1 y2, f z1
 mmap :: (Double -> Double) -> Vec3 -> Vec3
 mmap f (Vec3 (x, y, z)) = Vec3 (f x, f y, f z)
 
+nearZero :: Vec3 -> Bool
+nearZero v =
+  let s = 1e-8
+   in all ((< s) . abs) [v.x, v.y, v.z]
+
 -- * Random
 
-randomRangeIO :: Double -> Double -> IO Double
-randomRangeIO min' max' = (\r -> min' + (max' - min') * r) <$> randomIO
+randomRange :: MonadRandom m => Double -> Double -> m Double
+randomRange min' max' = (\r -> min' + (max' - min') * r) <$> random
 
-vec3UnitRandomIO :: IO Vec3Unit
-vec3UnitRandomIO = vec3Unit <$> randomInUnitSphereIO
+vec3UnitRandom :: MonadRandom m => m Vec3Unit
+vec3UnitRandom = vec3Unit <$> randomInUnitSphere
 
-vec3RandomRangeIO :: Double -> Double -> IO Vec3
-vec3RandomRangeIO min' max' =
-  vec3 <$> randomRangeIO min' max' <*> randomRangeIO min' max' <*> randomRangeIO min' max'
+vec3RandomRange :: MonadRandom m => Double -> Double -> m Vec3
+vec3RandomRange min' max' =
+  vec3 <$> randomRange min' max' <*> randomRange min' max' <*> randomRange min' max'
 
-randomInUnitSphereIO :: IO Vec3
-randomInUnitSphereIO = do
-  v <- vec3RandomRangeIO -1 1
+randomInUnitSphere :: MonadRandom m => m Vec3
+randomInUnitSphere = do
+  v <- vec3RandomRange -1 1
   if vec3LenSqr v >= 1
-    then randomInUnitSphereIO
+    then randomInUnitSphere
     else pure v
 
 (*!) :: Double -> Vec3 -> Vec3
@@ -130,6 +141,26 @@ getFaceNormal ray outwardNormal =
       normal = if frontFace then outwardNormal else -outwardNormal
    in (frontFace, normal)
 
+data MaterialRecord = MaterialRecord
+  { attenuation :: Color
+  , scattered :: Ray
+  }
+
+newtype Material m = Material {unMaterial :: Ray -> HitRecord -> m (Maybe MaterialRecord)}
+
+lambertian :: MonadRandom m => Color -> Material m
+lambertian col = Material $ \_rayIn hitRec -> do
+  randomUnitVec <- vec3UnitRandom
+  let scatterDir' = hitRec.normal + randomUnitVec
+  -- Catch degenerate scatter direction
+  let scatterDir = if nearZero scatterDir' then hitRec.normal else scatterDir'
+  pure $
+    Just
+      MaterialRecord
+        { attenuation = col
+        , scattered = Ray hitRec.p scatterDir
+        }
+
 mkHitRecord :: Ray -> Double -> Point3 -> Vec3 -> HitRecord
 mkHitRecord ray t p outwardNormal =
   let (frontFace, normal) = getFaceNormal ray outwardNormal
@@ -138,6 +169,7 @@ mkHitRecord ray t p outwardNormal =
         , t = t
         , normal = normal
         , frontFace = frontFace
+        -- , mat = mat
         }
 
 data HitRecord = HitRecord
@@ -147,22 +179,22 @@ data HitRecord = HitRecord
   , frontFace :: Bool
   }
 
-newtype Hittable = Hittable {unHittable :: Ray -> Double -> Double -> Maybe HitRecord}
+newtype Hittable m = Hittable {unHittable :: Ray -> Double -> Double -> Maybe (HitRecord, Material m)}
 
-instance Semigroup Hittable where
+instance Semigroup (Hittable m) where
   Hittable h1 <> Hittable h2 = Hittable $ \ray tMin tMax -> do
     let r1' = h1 ray tMin tMax
         r2' = h2 ray tMin tMax
     case (r1', r2') of
-      (Just r1, Just r2) -> pure $ if r1.t < r2.t then r1 else r2
+      (Just r1, Just r2) -> pure $ if (fst r1).t < (fst r2).t then r1 else r2
       (Nothing, Just r2) -> pure r2
       (r1, Nothing) -> r1
 
-instance Monoid Hittable where
+instance Monoid (Hittable m) where
   mempty = Hittable $ \_ _ _ -> Nothing
 
-sphere :: Point3 -> Double -> Hittable
-sphere center radius = Hittable $ \ray tMin tMax -> do
+sphere :: MonadRandom m => Point3 -> Double -> Material m -> Hittable m
+sphere center radius mat = Hittable $ \ray tMin tMax -> do
   let oc :: Vec3 = ray.origin - center
       a = vec3LenSqr ray.direction
       halfB = vec3Dot oc ray.direction
@@ -182,18 +214,20 @@ sphere center radius = Hittable $ \ray tMin tMax -> do
   let t = newRoot
       p = rayAt t ray
       outwardNormal = (p - center) / (toVec3 radius)
-  pure $ mkHitRecord ray t p outwardNormal
+  pure $ (mkHitRecord ray t p outwardNormal, mat)
 
 -- | Convert ray to color
-rayColorIO :: Ray -> Hittable -> Int -> IO Color
-rayColorIO _ _ 0 = pure 0
-rayColorIO ray (Hittable world) maxDepth =
+rayColor :: MonadRandom m => Ray -> Hittable m -> Int -> m Color
+rayColor _ _ 0 = pure 0
+rayColor ray (Hittable world) maxDepth =
   case world ray 0.001 inf of
-    Just rec' -> do
-      randomInUnitSphere <- vec3UnitRandomIO
-      let target = rec'.p + rec'.normal + randomInUnitSphere
-      c <- rayColorIO (Ray rec'.p (target - rec'.p)) (Hittable world) (maxDepth - 1)
-      pure $ 0.5 * c
+    Just (rec', Material matFunc) -> do
+      mat' <- matFunc ray rec'
+      case mat' of
+        Just mat -> do
+          refl <- rayColor (mat.scattered) (Hittable world) (maxDepth - 1)
+          pure $ mat.attenuation * refl
+        Nothing -> pure 0
     Nothing ->
       let unitDir = vec3Unit ray.direction
           tSky :: Vec3 = toVec3 (0.5 * (unitDir.y + 1))
@@ -250,9 +284,9 @@ run = do
   -- World
   let world =
         mconcat
-          [ sphere (vec3 -1 0 -1) 0.5
-          , sphere (vec3 1 0 -1) 0.25
-          , sphere (vec3 0 -100.5 -1) 100 -- Ground
+          [ sphere (vec3 -1 0 -1) 0.5 (lambertian $ vec3 0.3 0 0)
+          , sphere (vec3 1 0 -1) 0.25 (lambertian $ vec3 0 0 0.3)
+          , sphere (vec3 0 -100.5 -1) 100 (lambertian $ vec3 0 0.3 0)
           ]
 
   -- Render
@@ -268,7 +302,7 @@ run = do
         let u :: Double = (fromIntegral i + ur) / (fromIntegral (imageWidth - 1))
             v :: Double = (fromIntegral j + vr) / (fromIntegral (imageHeight - 1))
             ray = getRay cam u v
-        rayColorIO ray world maxDepth
+        rayColor ray world maxDepth
       hPutStr h $ renderColor pixelColor samples
   hFlush h
   hClose h
