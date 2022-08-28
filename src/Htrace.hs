@@ -1,13 +1,12 @@
 module Htrace where
 
 import Control.Monad (forM, forM_, guard)
-import Data.Coerce (coerce)
+import Data.List (intercalate)
 import Data.Ord (clamp)
+import Data.Time.Clock (getCurrentTime)
 import GHC.Records (HasField (getField))
 import System.IO (IOMode (WriteMode), hClose, hFlush, hPutStr, openFile, stdout)
 import System.Random (mkStdGen, randomIO, setStdGen)
-import Data.Time.Clock (getCurrentTime)
-import Data.List (intercalate)
 
 inf :: Double
 inf = (10 :: Double) ^ (1000 :: Integer)
@@ -15,17 +14,7 @@ inf = (10 :: Double) ^ (1000 :: Integer)
 newtype Vec3 = Vec3 (Double, Double, Double)
   deriving stock (Show, Eq, Ord)
 
-newtype Vec3Unit = Vec3Unit {unVec3Unit :: Vec3}
-  deriving stock (Show, Eq, Ord)
-
-instance HasField "x" Vec3Unit Double where
-  getField = getField @"x" . coerce @Vec3Unit @Vec3
-
-instance HasField "y" Vec3Unit Double where
-  getField = getField @"y" . coerce @Vec3Unit @Vec3
-
-instance HasField "z" Vec3Unit Double where
-  getField = getField @"z" . coerce @Vec3Unit @Vec3
+type Vec3Unit = Vec3
 
 toVec3 :: Double -> Vec3
 toVec3 a = Vec3 (a, a, a)
@@ -39,11 +28,13 @@ vec3Bin f (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) = Vec3 (f x1 x2, f y1 y2, f z1
 mmap :: (Double -> Double) -> Vec3 -> Vec3
 mmap f (Vec3 (x, y, z)) = Vec3 (f x, f y, f z)
 
+-- * Random
+
 randomRangeIO :: Double -> Double -> IO Double
-randomRangeIO min' max' = (\r -> min' + (max' - min') * r) <$>  randomIO
+randomRangeIO min' max' = (\r -> min' + (max' - min') * r) <$> randomIO
 
 vec3UnitRandomIO :: IO Vec3Unit
-vec3UnitRandomIO = fmap Vec3Unit (vec3 <$> randomIO <*> randomIO <*> randomIO)
+vec3UnitRandomIO = vec3Unit <$> randomInUnitSphereIO
 
 vec3RandomRangeIO :: Double -> Double -> IO Vec3
 vec3RandomRangeIO min' max' =
@@ -102,7 +93,7 @@ vec3Cross (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
 
 -- | Convert vector to unit vector
 vec3Unit :: Vec3 -> Vec3Unit
-vec3Unit v = Vec3Unit $ mmap (/ vec3Len v) v
+vec3Unit v = mmap (/ vec3Len v) v
 
 type Point3 = Vec3
 type Color = Vec3
@@ -199,7 +190,7 @@ rayColorIO _ _ 0 = pure 0
 rayColorIO ray (Hittable world) maxDepth =
   case world ray 0.001 inf of
     Just rec' -> do
-      randomInUnitSphere <- randomInUnitSphereIO
+      randomInUnitSphere <- vec3UnitRandomIO
       let target = rec'.p + rec'.normal + randomInUnitSphere
       c <- rayColorIO (Ray rec'.p (target - rec'.p)) (Hittable world) (maxDepth - 1)
       pure $ 0.5 * c
@@ -248,11 +239,10 @@ run = do
       imageHeight :: Int = floor (fromIntegral imageWidth / aspectRatio)
       imageWidth :: Int = 400
       samples = 128
-      maxDepth = 48;
-      -- imageWidth :: Int = 4096
-      -- samples = 512
-      -- maxDepth = 256;
-
+      maxDepth = 48
+  -- imageWidth :: Int = 4096
+  -- samples = 512
+  -- maxDepth = 256;
 
   -- Camera
   let cam = Camera aspectRatio 2 1 0
