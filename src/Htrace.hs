@@ -110,10 +110,11 @@ type Color = Vec3
 -- | Render color to P3 ppm format
 renderColor :: Color -> Int -> String
 renderColor c samples =
+  -- Divide the color by the number of samples and gamma-correct for gamma=2.0.
   let scale :: Double = 1.0 / (fromIntegral samples)
-      r = 256 * (clamp (0, 0.999) (c.x * scale))
-      g = 256 * (clamp (0, 0.999) (c.y * scale))
-      b = 256 * (clamp (0, 0.999) (c.z * scale))
+      r = 256 * (clamp (0, 0.999) (sqrt $ c.x * scale))
+      g = 256 * (clamp (0, 0.999) (sqrt $ c.y * scale))
+      b = 256 * (clamp (0, 0.999) (sqrt $ c.z * scale))
    in mconcat
         [ show (floor @Double @Int r)
         , " "
